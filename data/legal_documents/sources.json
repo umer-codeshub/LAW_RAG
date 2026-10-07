@@ -1,0 +1,33 @@
+{
+  "Code_of_Criminal_Procedure_1898.pdf": {
+    "title": "The Code of Criminal Procedure, 1898",
+    "category": "Criminal Procedure"
+  },
+  "Police_Order_2002.pdf": {
+    "title": "The Police Order, 2002",
+    "category": "Police"
+  },
+  "NHMP_Dimension_of_Goods_Transport_Vehicle_Rules_2017.pdf": {
+    "organization": "Government of Pakistan, Ministry of Communications (National Highways and Pakistan Motorway Police)",
+    "version": "Gazette of Pakistan, Part II, Statutory Notifications, 8 March 2018 (notification dated 20 February 2018)",
+    "category": "Traffic and Motorway",
+    "jurisdiction": "Federal"
+  },
+  "DLA_Rules_2014.pdf": {
+    "organization": "Government of Pakistan, Ministry of Communications (National Highways and Pakistan Motorway Police)",
+    "version": "Gazette of Pakistan, Part II, Statutory Notifications, 4 October 2016",
+    "category": "Traffic and Motorway",
+    "jurisdiction": "Federal"
+  },
+  "National_Highways_Safety_Ordinance_2000.pdf": {
+    "organization": "Government of Pakistan, Ministry of Law, Justice, Human Rights and Parliamentary Affairs (Law, Justice and Human Rights Division)",
+    "version": "Gazette of Pakistan, Part I, 5 September 2000",
+    "category": "Traffic and Motorway",
+    "jurisdiction": "Federal"
+  },
+  "Pakistan_Penal_Code_1860.pdf": {
+    "title": "The Pakistan Penal Code (Act XLV of 1860)",
+    "version": "Act XLV of 1860, 6 October 1860",
+    "category": "Criminal Law"
+  }
+}
