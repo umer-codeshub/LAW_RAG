@@ -12,7 +12,8 @@ General chatbots can state laws, sections and penalties that sound right but are
 - Built-in knowledge base loaded from `data/legal_documents/` (PDF and TXT)
 - Optional session-only upload of a PDF or TXT (never saved)
 - Retrieval with FAISS and `sentence-transformers/all-MiniLM-L6-v2`
-- Relevance threshold: when nothing relevant is retrieved, Groq is **not called** and the refusal sentence is returned
+- Relevance threshold: when nothing relevant is retrieved, **no answer is generated** and the refusal sentence is returned
+- **English and Roman Urdu**: the question's language is detected, the question is translated to English only for searching, and the answer is written in the user's language (the refusal sentence is also given in Roman Urdu)
 - Strict grounding prompt, temperature 0
 - Sources built from chunk metadata (document, page, possible section, organization, URL if provided), never written by the model
 - Retrieved context shown in an expander
@@ -23,9 +24,9 @@ General chatbots can state laws, sections and penalties that sound right but are
 ```text
 Documents (PDF/TXT) -> text extraction (page numbers kept) -> cleaning -> chunking (800/150)
 -> embeddings (MiniLM, 384-dim) -> FAISS index
-Question -> embedding -> similarity search -> top-k chunks
+Question -> language detection + English search query (Groq) -> embedding -> similarity search -> top-k chunks
 -> relevance gate (MIN_SCORE) --no--> "I could not find this information in the provided legal documents."
-                              --yes-> context + question -> Groq (openai/gpt-oss-120b) -> answer + sources
+                              --yes-> context + question + reply language -> Groq (openai/gpt-oss-120b) -> answer + sources
 ```
 The same functions run in the Colab notebook and in `app.py`.
 
@@ -122,7 +123,8 @@ Each answer lists the document, page, organization, version and URL **only when 
 
 ## Limitations
 - Only as good as the loaded documents: they may be outdated, amended, or from the wrong jurisdiction.
-- English-only embedding model; Urdu and Roman Urdu questions will retrieve poorly.
+- The embedding model is English-only and the documents are English. Roman Urdu works by translating the question to English before searching, so a mistranslation can hurt retrieval (the app shows "Searched as: ..." so you can check). Roman Urdu answers are a translation of English text: verify important points against the English sources. Urdu script is not supported; such questions are treated as English.
+- Each question uses two Groq calls (translation, then answer), so it is a little slower and uses more of the rate limit.
 - Scanned PDFs are not supported (no OCR).
 - Similarity thresholds reduce but cannot eliminate off-target retrieval; `MIN_SCORE` needs calibration on your documents.
 - Section detection is heuristic. A chunk may contain several sections.
@@ -130,4 +132,4 @@ Each answer lists the document, page, organization, version and URL **only when 
 - The index is rebuilt on each app restart.
 
 ## Future improvements
-Urdu / Roman Urdu support and multilingual embeddings, OCR, hybrid search (BM25), reranking, better section-aware retrieval, document version comparison, law update monitoring, provincial law databases, advanced RAG evaluation, citation verification, search filters.
+Urdu script support, multilingual embeddings (to search without translating), OCR, hybrid search (BM25), reranking, better section-aware retrieval, document version comparison, law update monitoring, provincial law databases, advanced RAG evaluation, citation verification, search filters.
