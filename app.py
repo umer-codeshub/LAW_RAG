@@ -16,6 +16,7 @@ CHUNK_OVERLAP = 150
 TOP_K = 5
 MIN_SCORE = 0.30   # starting value. Calibrate it in Colab (Cell 16).
 NOT_FOUND_MESSAGE = "I could not find this information in the provided legal documents."
+NOT_FOUND_MESSAGE_ROMAN_URDU = "Mujhe provided legal documents mein is sawal ka jawab nahi mila."
 OPTIONAL_METADATA_FIELDS = ["title", "organization", "url", "version", "category", "jurisdiction"]
 
 def load_sources_metadata(folder):
@@ -227,8 +228,12 @@ Answer ONLY using the provided context.
 Do not use outside knowledge. Do not guess.
 Do not invent laws, sections, penalties, fines, procedures, citations, cases, or sources.
 
-If the answer is not supported by the provided context, reply with exactly this sentence and nothing else:
-"{NOT_FOUND_MESSAGE}"
+If the answer is not supported by the provided context, reply with exactly one of these sentences and nothing else:
+English: "{NOT_FOUND_MESSAGE}"
+Roman Urdu: "{NOT_FOUND_MESSAGE_ROMAN_URDU}"
+Use the sentence that matches the REPLY LANGUAGE given in the user message.
+
+Write the answer in the REPLY LANGUAGE given in the user message. If it is Roman Urdu, write natural Roman Urdu (Urdu in English letters), but keep document names, section numbers, and legal terms exactly as they appear in the context. Never add anything that is not in the context.
 
 If the context only partly answers the question, give the supported part and clearly say what is not covered.
 If the context contains different information on the same matter, say: "The retrieved documents contain different information on this matter." and describe each, naming its source.
@@ -261,13 +266,56 @@ def build_context(results):
         blocks.append(header + "\n" + result["text"])
     return "\n\n---\n\n".join(blocks)
 
-def generate_answer(question, results, client, model_name=GROQ_MODEL_NAME):
+def not_found_message(language):
+    return NOT_FOUND_MESSAGE_ROMAN_URDU if language == "roman_urdu" else NOT_FOUND_MESSAGE
+
+
+def is_refusal(answer):
+    """True if the answer is the standard refusal in English or Roman Urdu."""
+    return NOT_FOUND_MESSAGE in answer or NOT_FOUND_MESSAGE_ROMAN_URDU in answer
+
+
+QUERY_PREP_PROMPT = """You prepare questions for searching English legal documents. Do NOT answer the question.
+1. Detect the language: "english", or "roman_urdu" (Urdu written in English letters, e.g. "FIR kaise darj hoti hai?").
+2. Rewrite the question as a clear English search question. Keep the meaning exactly and add nothing. If it is already English, keep it unchanged.
+Reply with JSON only, no other text: {"language": "english or roman_urdu", "english_query": "..."}"""
+
+
+def prepare_query(question, client, model_name=GROQ_MODEL_NAME):
+    """Detect English vs Roman Urdu and translate the question to English for searching.
+    The embedding model is English-only. On any problem, fall back to the original question."""
+    fallback = {"language": "english", "search_query": question}
+    try:
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": QUERY_PREP_PROMPT},
+                {"role": "user", "content": question},
+            ],
+            temperature=0,
+            max_tokens=800,
+            extra_body={"reasoning_effort": "low"},
+        )
+        text = (response.choices[0].message.content or "").strip()
+        text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.MULTILINE).strip()
+        data = json.loads(text)
+        english_query = (data.get("english_query") or "").strip()
+        if not english_query:
+            return fallback
+        language = "roman_urdu" if data.get("language") == "roman_urdu" else "english"
+        return {"language": language, "search_query": english_query}
+    except Exception:
+        return fallback
+
+def generate_answer(question, results, client, model_name=GROQ_MODEL_NAME, language="english"):
     """Ask Groq to answer from the retrieved context only. Raises RuntimeError with a friendly message."""
     import groq
     context = build_context(results)
+    reply_language = "Roman Urdu (Urdu written in English letters)" if language == "roman_urdu" else "English"
     user_message = (
         f"CONTEXT:\n{context}\n\n"
         f"QUESTION: {question}\n\n"
+        f"REPLY LANGUAGE: {reply_language}\n\n"
         "Answer using only the context above."
     )
     try:
@@ -299,16 +347,22 @@ def generate_answer(question, results, client, model_name=GROQ_MODEL_NAME):
 def rag_query(question, index, chunks, model, client, k=TOP_K, min_score=MIN_SCORE,
               origin="Built-in Knowledge Base"):
     """Full pipeline: retrieve -> relevance gate -> Groq -> answer + sources.
-    Groq is NEVER called when no relevant context was retrieved."""
+    No ANSWER is generated when no relevant context was retrieved.
+    (Groq is used once beforehand only to detect the language and translate the question for searching.)"""
     result = {"question": question, "answer": "", "sources": [], "context": [],
-              "retrieved": [], "found": False, "origin": origin, "error": None}
+              "retrieved": [], "found": False, "origin": origin, "error": None,
+              "language": "english", "search_query": question}
 
     if not question or not question.strip():
         result["answer"] = "Please type a question."
         return result
 
+    prepared = prepare_query(question, client)      # English or Roman Urdu -> English search query
+    language, search_query = prepared["language"], prepared["search_query"]
+    result["language"], result["search_query"] = language, search_query
+
     try:
-        retrieved = retrieve_documents(question, index, chunks, model, k=k)
+        retrieved = retrieve_documents(search_query, index, chunks, model, k=k)
     except Exception:
         result["error"] = "Search failed. Please try again."
         return result
@@ -316,18 +370,18 @@ def rag_query(question, index, chunks, model, client, k=TOP_K, min_score=MIN_SCO
 
     relevant = [r for r in retrieved if r["score"] >= min_score]
     if not relevant:
-        result["answer"] = NOT_FOUND_MESSAGE
+        result["answer"] = not_found_message(language)
         return result
 
     try:
-        answer = generate_answer(question, relevant, client)
+        answer = generate_answer(question, relevant, client, language=language)
     except RuntimeError as error:
         result["error"] = str(error)
         return result
 
     result["answer"] = answer
     result["context"] = relevant
-    if NOT_FOUND_MESSAGE in answer:
+    if is_refusal(answer):
         result["context"] = []          # model refused, so show no sources
         return result
     result["found"] = True
@@ -388,6 +442,8 @@ def build_uploaded_knowledge_base(uploaded_file, model):
 def show_result_details(message):
     if message.get("origin"):
         st.caption(f"Answer source: {message['origin']}")
+    if message.get("search_query") and message["search_query"].strip() != message.get("question", "").strip():
+        st.caption(f"Searched as: {message['search_query']}")
     if message.get("sources"):
         st.markdown("**Sources**")
         for line in message["sources"]:
@@ -501,6 +557,8 @@ if question is not None:
                     "sources": result["sources"],
                     "context": result["context"],
                     "origin": origin if not result["error"] else None,
+                    "search_query": result["search_query"],
+                    "question": question,
                 }
             st.markdown(reply["content"])
             show_result_details(reply)
