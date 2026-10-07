@@ -226,6 +226,7 @@ SYSTEM_PROMPT = f"""You are LAW AI, a document based Pakistani legal information
 
 Answer ONLY using the provided context.
 Do not use outside knowledge. Do not guess.
+First check that the context is really about the SUBJECT of the question. If the context is about a different subject (for example, the question asks about one procedure but the context describes a different procedure that only uses a similar word), do NOT answer with it. Use the refusal sentence instead. Never answer a different question than the one asked.
 Do not invent laws, sections, penalties, fines, procedures, citations, cases, or sources.
 
 If the answer is not supported by the provided context, reply with exactly one of these sentences and nothing else:
@@ -278,6 +279,7 @@ def is_refusal(answer):
 QUERY_PREP_PROMPT = """You prepare questions for searching English legal documents. Do NOT answer the question.
 1. Detect the language: "english", or "roman_urdu" (Urdu written in English letters, e.g. "FIR kaise darj hoti hai?").
 2. Rewrite the question as a clear English search question. Keep the meaning exactly and add nothing. If it is already English, keep it unchanged.
+If the question contains one of these abbreviations, keep it and add its full form in brackets: FIR (First Information Report), NHMP (National Highways and Motorway Police), PPC (Pakistan Penal Code), CrPC (Code of Criminal Procedure). Do not expand any other abbreviation.
 Reply with JSON only, no other text: {"language": "english or roman_urdu", "english_query": "..."}"""
 
 
@@ -477,8 +479,12 @@ builtin_kb = get_builtin_knowledge_base()
 with st.sidebar:
     st.header("Knowledge Base")
     if builtin_kb["report"]:
+        chunk_counts = {}
+        for chunk in builtin_kb["chunks"]:
+            name = chunk["metadata"]["source"]
+            chunk_counts[name] = chunk_counts.get(name, 0) + 1
         for item in builtin_kb["report"]:
-            st.markdown(f"✓ {item['file']}")
+            st.markdown(f"✓ {item['file']} ({chunk_counts.get(item['file'], 0)} chunks)")
         st.caption(f"{len(builtin_kb['chunks'])} searchable chunks")
         categories = sorted({c["metadata"]["category"] for c in builtin_kb["chunks"] if c["metadata"].get("category")})
         if categories:
