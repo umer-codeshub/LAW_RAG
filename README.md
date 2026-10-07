@@ -25,7 +25,7 @@ Documents (PDF/TXT) -> text extraction (page numbers kept) -> cleaning -> chunki
 -> embeddings (MiniLM, 384-dim) -> FAISS index
 Question -> embedding -> similarity search -> top-k chunks
 -> relevance gate (MIN_SCORE) --no--> "I could not find this information in the provided legal documents."
-                              --yes-> context + question -> Groq (llama-3.3-70b-versatile) -> answer + sources
+                              --yes-> context + question -> Groq (openai/gpt-oss-120b) -> answer + sources
 ```
 The same functions run in the Colab notebook and in `app.py`.
 
