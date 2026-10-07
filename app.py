@@ -404,8 +404,20 @@ DISCLAIMER = (
 )
 BUILT_IN = "Built-in Knowledge Base"
 UPLOADED = "User Uploaded Document"
+EXAMPLE_QUESTIONS = [
+    "What is the procedure for registering an FIR?",
+    "What does the law say about arrest?",
+    "When can a search or seizure take place?",
+    "What are the rules for drivers on a motorway?",
+    "What are the responsibilities of NHMP?",
+    "FIR kaise darj hoti hai?",
+]
 
-st.set_page_config(page_title="LAW AI", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="LAW AI", page_icon="⚖️", layout="centered", initial_sidebar_state="expanded")
+st.markdown(
+    "<style>.block-container{padding-top:2rem;padding-bottom:6rem;max-width:860px;}</style>",
+    unsafe_allow_html=True,
+)
 
 
 @st.cache_resource(show_spinner="Loading embedding model...")
@@ -441,139 +453,185 @@ def build_uploaded_knowledge_base(uploaded_file, model):
     return {"index": build_faiss_index(chunks, model), "chunks": chunks, "name": uploaded_file.name}
 
 
-def show_result_details(message):
+def set_pending_question(text):
+    st.session_state.pending_question = text
+
+
+def render_assistant_message(message):
+    """Answer (styled by type), then origin, sources and the evidence behind it."""
+    content = message["content"]
+    if message.get("is_error"):
+        st.error(content)
+    elif is_refusal(content):
+        st.warning(content)
+    else:
+        st.markdown(content)
+
     if message.get("origin"):
-        st.caption(f"Answer source: {message['origin']}")
-    if message.get("search_query") and message["search_query"].strip() != message.get("question", "").strip():
-        st.caption(f"Searched as: {message['search_query']}")
+        caption = f"Answer source: {message['origin']}"
+        search_query = (message.get("search_query") or "").strip()
+        if search_query and search_query != message.get("question", "").strip():
+            caption += f"  ·  Searched as: {search_query}"
+        st.caption(caption)
+
     if message.get("sources"):
-        st.markdown("**Sources**")
-        for line in message["sources"]:
-            st.markdown(f"- {line}")
-    if message.get("retrieved") and not message.get("context"):
-        with st.expander("Closest chunks found (NOT used for the answer)"):
-            st.caption(f"A chunk is used only if its similarity is at least {MIN_SCORE}. "
-                       "If the right text is here with a lower score, the threshold is too high.")
-            for item in message["retrieved"]:
-                st.markdown(f"{format_source(item['metadata'])}  \n_similarity: {item['score']:.2f}_")
-                st.text(item["text"][:400])
+        with st.container(border=True):
+            st.markdown("**Sources**")
+            for line in message["sources"]:
+                st.markdown(f"- {line}")
+
     if message.get("context"):
-        with st.expander("Retrieved context"):
+        with st.expander("View retrieved context"):
             for number, item in enumerate(message["context"], start=1):
                 st.markdown(f"**[Source {number}]** {format_source(item['metadata'])}  \n_similarity: {item['score']:.2f}_")
                 st.text(item["text"])
+    elif message.get("retrieved"):
+        with st.expander("Closest chunks found (not used for the answer)"):
+            st.caption(f"A chunk is used only if its similarity is at least {MIN_SCORE}.")
+            for item in message["retrieved"]:
+                st.markdown(f"{format_source(item['metadata'])}  \n_similarity: {item['score']:.2f}_")
+                st.text(item["text"][:400])
 
 
-# ---------- Header ----------
-st.title("LAW AI")
-st.subheader("Pakistan Legal Information Assistant")
-st.info(DISCLAIMER)
+def get_reply(question, kb, origin, api_key, top_k):
+    """Run the RAG pipeline and package the result for display."""
+    if not api_key:
+        return {"role": "assistant", "is_error": True,
+                "content": "The Groq API key is missing. Add GROQ_API_KEY to the Streamlit secrets."}
+    if kb["index"] is None:
+        return {"role": "assistant", "content": NOT_FOUND_MESSAGE, "origin": origin}
+    result = rag_query(question, kb["index"], kb["chunks"], embedding_model,
+                       get_cached_client(api_key), k=top_k, origin=origin)
+    return {
+        "role": "assistant",
+        "content": result["error"] or result["answer"],
+        "is_error": bool(result["error"]),
+        "sources": result["sources"],
+        "context": result["context"],
+        "retrieved": result["retrieved"],
+        "origin": None if result["error"] else origin,
+        "search_query": result["search_query"],
+        "question": question,
+    }
 
+
+# ---------- State ----------
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 embedding_model = get_embedding_model()
 builtin_kb = get_builtin_knowledge_base()
 
+chunk_counts = {}
+for chunk in builtin_kb["chunks"]:
+    name = chunk["metadata"]["source"]
+    chunk_counts[name] = chunk_counts.get(name, 0) + 1
+
 # ---------- Sidebar ----------
 with st.sidebar:
-    st.header("Knowledge Base")
-    if builtin_kb["report"]:
-        chunk_counts = {}
-        for chunk in builtin_kb["chunks"]:
-            name = chunk["metadata"]["source"]
-            chunk_counts[name] = chunk_counts.get(name, 0) + 1
-        for item in builtin_kb["report"]:
-            st.markdown(f"✓ {item['file']} ({chunk_counts.get(item['file'], 0)} chunks)")
-        st.caption(f"{len(builtin_kb['chunks'])} searchable chunks")
-        categories = sorted({c["metadata"]["category"] for c in builtin_kb["chunks"] if c["metadata"].get("category")})
-        if categories:
-            st.markdown("**Legal categories**")
-            for category in categories:
-                st.markdown(f"- {category}")
-    else:
-        st.warning("No built-in legal documents found in data/legal_documents/.")
-    for message in builtin_kb["errors"]:
-        st.warning(message)
+    st.header("⚖️ LAW AI")
+    st.caption("Pakistan Legal Information Assistant")
 
-    st.divider()
-    st.header("Upload Document")
-    uploaded_file = st.file_uploader("PDF or TXT (this session only)", type=["pdf", "txt"])
-    uploaded_kb = None
-    if uploaded_file is not None:
-        cache_key = (uploaded_file.name, uploaded_file.size)
-        if st.session_state.get("upload_key") != cache_key:
-            try:
-                with st.spinner("Processing document..."):
-                    st.session_state.upload_kb = build_uploaded_knowledge_base(uploaded_file, embedding_model)
-                    st.session_state.upload_key = cache_key
-            except ValueError as error:
-                st.session_state.pop("upload_kb", None)
-                st.session_state.pop("upload_key", None)
-                st.error(str(error))
-            except Exception:
-                st.session_state.pop("upload_kb", None)
-                st.session_state.pop("upload_key", None)
-                st.error("The document could not be processed.")
-        uploaded_kb = st.session_state.get("upload_kb")
-        if uploaded_kb:
-            st.success(f"Ready: {uploaded_kb['name']} ({len(uploaded_kb['chunks'])} chunks)")
-    else:
-        st.session_state.pop("upload_kb", None)
-        st.session_state.pop("upload_key", None)
+    left, right = st.columns(2)
+    left.metric("Documents", len(builtin_kb["report"]))
+    right.metric("Chunks", len(builtin_kb["chunks"]))
+
+    with st.expander("📚 Knowledge base", expanded=True):
+        if builtin_kb["report"]:
+            for item in builtin_kb["report"]:
+                st.markdown(f"✓ {item['file']}  \n<small>{chunk_counts.get(item['file'], 0)} chunks</small>",
+                            unsafe_allow_html=True)
+            categories = sorted({c["metadata"]["category"] for c in builtin_kb["chunks"] if c["metadata"].get("category")})
+            if categories:
+                st.markdown("**Legal categories**")
+                for category in categories:
+                    st.markdown(f"- {category}")
+        else:
+            st.warning("No built-in legal documents found in data/legal_documents/.")
+        for message in builtin_kb["errors"]:
+            st.warning(message)
+
+    with st.expander("📎 Upload a document"):
+        uploaded_file = st.file_uploader("PDF or TXT (used for this session only)", type=["pdf", "txt"],
+                                         label_visibility="collapsed")
+        uploaded_kb = None
+        if uploaded_file is not None:
+            cache_key = (uploaded_file.name, uploaded_file.size)
+            if st.session_state.get("upload_key") != cache_key:
+                try:
+                    with st.spinner("Processing document..."):
+                        st.session_state.upload_kb = build_uploaded_knowledge_base(uploaded_file, embedding_model)
+                        st.session_state.upload_key = cache_key
+                except ValueError as error:
+                    st.session_state.pop("upload_kb", None)
+                    st.session_state.pop("upload_key", None)
+                    st.error(str(error))
+                except Exception:
+                    st.session_state.pop("upload_kb", None)
+                    st.session_state.pop("upload_key", None)
+                    st.error("The document could not be processed.")
+            uploaded_kb = st.session_state.get("upload_kb")
+            if uploaded_kb:
+                st.success(f"Ready: {uploaded_kb['name']} ({len(uploaded_kb['chunks'])} chunks)")
+        else:
+            st.session_state.pop("upload_kb", None)
+            st.session_state.pop("upload_key", None)
 
     options = [BUILT_IN] + ([UPLOADED] if uploaded_kb else [])
-    search_in = st.radio("Search in", options)
+    search_in = st.radio("Search in", options) if uploaded_kb else BUILT_IN
 
-    st.divider()
-    top_k = st.slider("Number of retrieved chunks", 1, 10, TOP_K)
-    st.caption(f"Embedding model: {EMBEDDING_MODEL_NAME}")
-    st.caption("Vector database: FAISS")
-    st.caption(f"LLM: Groq ({GROQ_MODEL_NAME})")
-    if st.button("Clear chat"):
+    with st.expander("⚙️ Settings"):
+        top_k = st.slider("Chunks retrieved per question", 1, 10, TOP_K)
+        st.caption(f"Embedding model: {EMBEDDING_MODEL_NAME}")
+        st.caption("Vector database: FAISS")
+        st.caption(f"LLM: Groq ({GROQ_MODEL_NAME})")
+
+    if st.button("🗑️ Clear chat", use_container_width=True):
         st.session_state.messages = []
         st.rerun()
 
+# ---------- Header ----------
+st.title("⚖️ LAW AI")
+st.caption("Pakistan Legal Information Assistant")
+st.caption(f"⚠️ {DISCLAIMER}")
+
+# ---------- Read the new question (typed or clicked) ----------
+typed_question = st.chat_input("Ask in English or Roman Urdu...")
+clicked_question = st.session_state.pop("pending_question", None)
+new_question = clicked_question or typed_question
+if new_question is not None and not new_question.strip():
+    st.warning("Please type a question.")
+    new_question = None
+if new_question:
+    st.session_state.messages.append({"role": "user", "content": new_question})
+
+# ---------- Welcome screen ----------
+if not st.session_state.messages:
+    with st.container(border=True):
+        st.markdown("#### Ask about the loaded legal documents")
+        st.write("Answers come **only** from the documents in the knowledge base, with sources. "
+                 "If the documents do not contain the answer, LAW AI says so instead of guessing.")
+    if builtin_kb["report"]:
+        st.markdown("**Try an example**")
+        columns = st.columns(2)
+        for number, example in enumerate(EXAMPLE_QUESTIONS):
+            columns[number % 2].button(example, key=f"example_{number}", use_container_width=True,
+                                       on_click=set_pending_question, args=(example,))
+
 # ---------- Chat history ----------
 for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+    with st.chat_message(message["role"], avatar="🧑" if message["role"] == "user" else "⚖️"):
         if message["role"] == "assistant":
-            show_result_details(message)
+            render_assistant_message(message)
+        else:
+            st.markdown(message["content"])
 
-# ---------- New question ----------
-question = st.chat_input("Ask a question about the legal documents...")
-if question is not None:
-    if not question.strip():
-        st.warning("Please type a question.")
-    else:
-        st.session_state.messages.append({"role": "user", "content": question})
-        with st.chat_message("user"):
-            st.markdown(question)
-
-        with st.chat_message("assistant"):
-            api_key = get_groq_key()
-            active_kb = uploaded_kb if (search_in == UPLOADED and uploaded_kb) else builtin_kb
-            origin = UPLOADED if active_kb is uploaded_kb and uploaded_kb else BUILT_IN
-
-            if not api_key:
-                reply = {"role": "assistant", "content": "The Groq API key is missing. Add GROQ_API_KEY to the Streamlit secrets.", "origin": None}
-            elif active_kb["index"] is None:
-                reply = {"role": "assistant", "content": NOT_FOUND_MESSAGE, "origin": origin}
-            else:
-                with st.spinner("Searching the legal documents..."):
-                    result = rag_query(question, active_kb["index"], active_kb["chunks"],
-                                       embedding_model, get_cached_client(api_key), k=top_k, origin=origin)
-                reply = {
-                    "role": "assistant",
-                    "content": result["error"] or result["answer"],
-                    "sources": result["sources"],
-                    "context": result["context"],
-                    "origin": origin if not result["error"] else None,
-                    "search_query": result["search_query"],
-                    "retrieved": result["retrieved"],
-                    "question": question,
-                }
-            st.markdown(reply["content"])
-            show_result_details(reply)
-        st.session_state.messages.append(reply)
+# ---------- Answer the new question ----------
+if new_question:
+    active_kb = uploaded_kb if (search_in == UPLOADED and uploaded_kb) else builtin_kb
+    origin = UPLOADED if active_kb is uploaded_kb and uploaded_kb else BUILT_IN
+    with st.chat_message("assistant", avatar="⚖️"):
+        with st.spinner("Searching the legal documents..."):
+            reply = get_reply(new_question, active_kb, origin, get_groq_key(), top_k)
+        render_assistant_message(reply)
+    st.session_state.messages.append(reply)
