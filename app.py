@@ -551,6 +551,28 @@ with st.sidebar:
         for message in builtin_kb["errors"]:
             st.warning(message)
 
+    with st.expander("🔍 Diagnostics (no AI)"):
+        st.caption("Check what was really extracted from your documents. This does not use Groq.")
+        for item in builtin_kb["report"]:
+            per_page = item["characters"] // max(item["pages_or_docs"], 1)
+            note = "  ⚠️ very little text per page (scanned PDF?)" if per_page < 200 else ""
+            st.caption(f"{item['file']}: {item['pages_or_docs']} pages with text, {per_page} chars/page{note}")
+
+        phrase = st.text_input("1. Is this phrase in the text?", placeholder="e.g. first information")
+        if phrase.strip():
+            hits = [c for c in builtin_kb["chunks"] if phrase.strip().lower() in c["text"].lower()]
+            st.write(f"Found in **{len(hits)}** chunks")
+            for hit in hits[:3]:
+                st.markdown(format_source(hit["metadata"]))
+                st.text(hit["text"][:300])
+
+        test_query = st.text_input("2. Test search (English)", placeholder="e.g. first information report")
+        if test_query.strip() and builtin_kb["index"] is not None:
+            for hit in retrieve_documents(test_query, builtin_kb["index"], builtin_kb["chunks"], embedding_model, k=5):
+                used = "used" if hit["score"] >= MIN_SCORE else "below threshold"
+                st.markdown(f"**{hit['score']:.2f}** ({used}) · {format_source(hit['metadata'])}")
+                st.text(hit["text"][:300])
+
     with st.expander("📎 Upload a document"):
         uploaded_file = st.file_uploader("PDF or TXT (used for this session only)", type=["pdf", "txt"],
                                          label_visibility="collapsed")
