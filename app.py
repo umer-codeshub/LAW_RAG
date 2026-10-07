@@ -10,7 +10,7 @@ import faiss
 from pypdf import PdfReader
 
 EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-GROQ_MODEL_NAME = "llama-3.3-70b-versatile"   # listed as a production model in Groq docs
+GROQ_MODEL_NAME = "openai/gpt-oss-120b"   # GPT-OSS 120B on Groq (reasoning model)
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 150
 TOP_K = 5
@@ -278,9 +278,13 @@ def generate_answer(question, results, client, model_name=GROQ_MODEL_NAME):
                 {"role": "user", "content": user_message},
             ],
             temperature=0,
-            max_tokens=900,
+            max_tokens=2500,   # reasoning models spend part of this on thinking, so keep it generous
+            extra_body={"reasoning_effort": "low"},   # supported by gpt-oss models; keeps answers fast
         )
-        return response.choices[0].message.content.strip()
+        answer = (response.choices[0].message.content or "").strip()
+        if not answer:
+            raise RuntimeError("The model returned an empty answer. Please try again.")
+        return answer
     except groq.AuthenticationError:
         raise RuntimeError("The Groq API key is invalid. Please check GROQ_API_KEY.")
     except groq.NotFoundError:
