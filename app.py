@@ -448,6 +448,13 @@ def show_result_details(message):
         st.markdown("**Sources**")
         for line in message["sources"]:
             st.markdown(f"- {line}")
+    if message.get("retrieved") and not message.get("context"):
+        with st.expander("Closest chunks found (NOT used for the answer)"):
+            st.caption(f"A chunk is used only if its similarity is at least {MIN_SCORE}. "
+                       "If the right text is here with a lower score, the threshold is too high.")
+            for item in message["retrieved"]:
+                st.markdown(f"{format_source(item['metadata'])}  \n_similarity: {item['score']:.2f}_")
+                st.text(item["text"][:400])
     if message.get("context"):
         with st.expander("Retrieved context"):
             for number, item in enumerate(message["context"], start=1):
@@ -558,6 +565,7 @@ if question is not None:
                     "context": result["context"],
                     "origin": origin if not result["error"] else None,
                     "search_query": result["search_query"],
+                    "retrieved": result["retrieved"],
                     "question": question,
                 }
             st.markdown(reply["content"])
